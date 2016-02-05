@@ -43,9 +43,13 @@ public class ExpirationTimeAnalyzer {
 		Cluster cluster = null;
 		Bucket bucket = null;
 		
+		long t1 = 0, t2 = 0;
+		
 		try {
+			t1 = System.currentTimeMillis();
 			cluster = CouchbaseCluster.create(HOSTNAME);
 			bucket  = cluster.openBucket(BUCKETNAME);
+			t2 = System.currentTimeMillis();
 		}
 		catch(Exception e) {
 			System.err.println("Exiting due to exception when connecting to Couchbase cluster or bucket.");
@@ -54,46 +58,55 @@ public class ExpirationTimeAnalyzer {
 			System.exit(1);
 		}
 		
+		System.out.println("It took about " + (t2 - t1) + " ms to connect to the cluster and bucket.");
+		
 		try {
+			t1 = System.currentTimeMillis();
 			View v = DefaultView.create(VIEWNAME, MAPFUNCTION);
 			List<View> listOfViews = new ArrayList<View>();
 			listOfViews.add(v);
 			DesignDocument dd = DesignDocument.create(DESIGNDOCUMENTNAME, listOfViews);
 			BucketManager bm = bucket.bucketManager();
 			bm.insertDesignDocument(dd);
+			t2 = System.currentTimeMillis();
 			
-			logMessage("The design doc and view have been created.  Sleeping 10 seconds.");	
+			logMessage("The design doc and view have been created, which took about " + ( t2 - t1) + " ms.  Sleeping 10 seconds.");	
 			try { Thread.sleep(10000); } catch (Exception e) { e.printStackTrace(); System.exit(1); }
 			
 		}
 		catch (DesignDocumentAlreadyExistsException ddaee) {
-			System.out.println("The design document already exists");
+			System.out.println("The design document already exists.  We will use it as-is.");
 		}
 		catch (Exception e) {
-			System.err.println("Exiting due to exception");
+			System.err.println("Exiting due to unknown exception when creating design document and view.");
 			e.printStackTrace();
 			System.exit(1);
 		}
 		
-		logMessage("About to issue the query on the view.");
-	
-		ViewResult result = bucket.query(ViewQuery.from(DESIGNDOCUMENTNAME, VIEWNAME).stale(staleValue));
+		logMessage("Design doc and view should now exist.  About to issue the query on the view.");
 
+		t1 = System.currentTimeMillis();
+		ViewResult result = bucket.query(ViewQuery.from(DESIGNDOCUMENTNAME, VIEWNAME).stale(staleValue));
+		t2 = System.currentTimeMillis();
+		logMessage("The view query took about " + ( t2 - t1) + " ms.");	
+
+		
 		int totalRows = result.totalRows();
-		logMessage("totalRows is " + totalRows);
+		logMessage("In the result from the view query, totalRows is " + totalRows);
 
 		JsonDocument jsonDocument = null;
 		
 		int totalResults           = 0;
 		int documentExpiry         = 0;
 		// int expiryFromNow          = 0;		
-		int numBuckets             = 10;   // We will have ten buckets
-		int maxValue               = 60;  // maximum expected expiration time value ( 180 seconds )
+		int numBuckets             = 10;   // We will have ten buckets, you may change this
+		int maxValue               = 60;  // maximum expected expiration time value ( in seconds )
 		int largestItemCount       = 10;
-		int terminalMaximumWidth   = 80;   // How wide is your terminal screen?
+		int terminalMaximumWidth   = 80;   // How wide is your terminal screen?  You may change this
 		int numWithExpiryException = 0;
 		int numWithNullDocument    = 0;
 		int numWithOtherException  = 0;
+		int numValuesProcessed     = 0;
 		
 		long timeDelta = 0;
 		
@@ -137,6 +150,7 @@ public class ExpirationTimeAnalyzer {
 					logMessage("timeNow:" + timeNow + " documentExpiry: " + documentExpiry + " timeDelta: " + timeDelta);
 
 					histogram.processValue(timeDelta);
+					numValuesProcessed++;
 				}
 				catch (Exception e) {
 					e.printStackTrace();
@@ -150,6 +164,7 @@ public class ExpirationTimeAnalyzer {
 		logMessage("numWithNullDocument:    " + numWithNullDocument);
 		logMessage("numWithExpiryException: " + numWithExpiryException);
 		logMessage("numWithOtherException:  " + numWithOtherException);
+		logMessage("numValuesProcessed:     " + numValuesProcessed);
 		logMessage("totalResults:           " + totalResults);
 		
 		bucket.close();
