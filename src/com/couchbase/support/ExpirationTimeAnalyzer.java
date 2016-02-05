@@ -1,39 +1,25 @@
 package com.couchbase.support;
 
 import com.couchbase.client.java.Bucket;
-import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.CouchbaseCluster;
-import com.couchbase.client.java.CouchbaseCluster;
 import com.couchbase.client.java.bucket.BucketManager;
-import com.couchbase.client.java.bucket.BucketManager;
-import com.couchbase.client.java.cluster.BucketSettings;
-import com.couchbase.client.java.cluster.ClusterManager;
-import com.couchbase.client.java.cluster.DefaultBucketSettings;
-import com.couchbase.client.java.document.Document;
 import com.couchbase.client.java.document.JsonDocument;
-import com.couchbase.client.java.document.json.JsonObject;
 import com.couchbase.client.java.error.DesignDocumentAlreadyExistsException;
 import com.couchbase.client.java.view.DefaultView;
-import com.couchbase.client.java.view.DefaultView;
-import com.couchbase.client.java.view.DesignDocument;
 import com.couchbase.client.java.view.DesignDocument;
 import com.couchbase.client.java.view.Stale;
-import com.couchbase.client.java.view.View;
 import com.couchbase.client.java.view.View;
 import com.couchbase.client.java.view.ViewQuery;
 import com.couchbase.client.java.view.ViewResult;
 import com.couchbase.client.java.view.ViewRow;
 
 import java.util.ArrayList;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
-
 
 // Brian Williams
 // June 19, 2015
+// Updated February 5, 2016
 // Built with Couchbase Java Client 2.1.3
 
 public class ExpirationTimeAnalyzer {
@@ -44,73 +30,109 @@ public class ExpirationTimeAnalyzer {
 
 		printCenteredBanner("Welcome to Expiration Time Analyzer");
 
-		String HOSTNAME           = "192.168.0.1";   // Replace with your own
-		String USERNAME           = "Administrator";
-		String PASSWORD           = "password";
-		String BUCKETNAME         = "histogramtest";
+		String HOSTNAME           = "192.168.0.1";     // Please replace this with your own
+//		String USERNAME           = "Administrator";
+//		String PASSWORD           = "password";
+		String BUCKETNAME         = "BUCKETNAME";
 		String DESIGNDOCUMENTNAME = "dd1";
 		String VIEWNAME           = "alldocs";
 		String MAPFUNCTION        = "function (doc, meta) { emit(meta.id, meta.expiration); }";
 //		Stale  staleValue         = Stale.UPDATE_AFTER;
 		Stale  staleValue         = Stale.FALSE;
 		
-		Cluster cluster = CouchbaseCluster.create(HOSTNAME);
-		Bucket  bucket  = cluster.openBucket(BUCKETNAME);
-	
+		Cluster cluster = null;
+		Bucket bucket = null;
+		
 		try {
-			View    v       = DefaultView.create(VIEWNAME, MAPFUNCTION);
+			cluster = CouchbaseCluster.create(HOSTNAME);
+			bucket  = cluster.openBucket(BUCKETNAME);
+		}
+		catch(Exception e) {
+			System.err.println("Exiting due to exception when connecting to Couchbase cluster or bucket.");
+			System.err.println("I was trying to connect to bucket " + BUCKETNAME + " on host " + HOSTNAME);
+			e.printStackTrace();
+			System.exit(1);
+		}
+		
+		try {
+			View v = DefaultView.create(VIEWNAME, MAPFUNCTION);
 			List<View> listOfViews = new ArrayList<View>();
 			listOfViews.add(v);
 			DesignDocument dd = DesignDocument.create(DESIGNDOCUMENTNAME, listOfViews);
 			BucketManager bm = bucket.bucketManager();
 			bm.insertDesignDocument(dd);
+			
+			logMessage("The design doc and view have been created.  Sleeping 10 seconds.");	
+			try { Thread.sleep(10000); } catch (Exception e) { e.printStackTrace(); System.exit(1); }
+			
 		}
 		catch (DesignDocumentAlreadyExistsException ddaee) {
 			System.out.println("The design document already exists");
 		}
 		catch (Exception e) {
+			System.err.println("Exiting due to exception");
+			e.printStackTrace();
 			System.exit(1);
 		}
 		
-		logMessage("The design doc and view have been created.  Sleeping 10 seconds.");
-		
-		try { Thread.sleep(10000); } catch (Exception e) { e.printStackTrace(); System.exit(1); }
-
 		logMessage("About to issue the query on the view.");
 	
 		ViewResult result = bucket.query(ViewQuery.from(DESIGNDOCUMENTNAME, VIEWNAME).stale(staleValue));
 
 		int totalRows = result.totalRows();
 		logMessage("totalRows is " + totalRows);
-		
-		int totalResults = 0;
+
 		JsonDocument jsonDocument = null;
-		int documentExpiry = 0;
-		int expiryFromNow = 0;
-		long timeNow = System.currentTimeMillis() / 1000;
 		
-		int numBuckets           = 10;
-		int maxValue             = 1000000;
-		int largestItemCount     = 10;
-		int terminalMaximumWidth = 80;
+		int totalResults           = 0;
+		int documentExpiry         = 0;
+		// int expiryFromNow          = 0;		
+		int numBuckets             = 10;   // We will have ten buckets
+		int maxValue               = 60;  // maximum expected expiration time value ( 180 seconds )
+		int largestItemCount       = 10;
+		int terminalMaximumWidth   = 80;   // How wide is your terminal screen?
 		int numWithExpiryException = 0;
 		int numWithNullDocument    = 0;
+		int numWithOtherException  = 0;
 		
 		long timeDelta = 0;
 		
 		SimpleHistogram histogram = new SimpleHistogram(numBuckets, maxValue, largestItemCount, terminalMaximumWidth);
+
+		long timeNow = System.currentTimeMillis() / 1000;
 		
 		for (ViewRow row : result) {
 
-			jsonDocument = row.document();
-
-			if (jsonDocument == null) {
-				numWithNullDocument++;
+			try {
+				jsonDocument = row.document();				// NOTE:  Expecting JSON document
 			}
-			else {
+			catch (Exception e){
+				// The best way to handle this would be output a sorted, unique GROUP BY table of Expressions Seen
+				//e.printStackTrace();
+				numWithOtherException++;
+			}
+				
+			if (jsonDocument == null) {
+				numWithNullDocument++;		// Why does this happen
+				
+				// Could be this
+				// com.couchbase.client.java.error.TranscodingException: Flags (0x4000012) indicate non-JSON document for id randomkey79, could not decode.
+				
+			}
+			//else {
+				
+				// The following branch of code is for when json document is not null
+				// But do we really need json document ?
+				
 				try {
-					documentExpiry = (Integer) row.value();
-					timeDelta = documentExpiry - timeNow;
+					documentExpiry = (Integer) row.value();	     // This is in seconds
+					
+					if (documentExpiry == 0) {
+						timeDelta = -1000;  // Will show as "items not counted"
+					}
+					else {
+						timeDelta = documentExpiry - timeNow;    // It *could* be negative
+					}
 					
 					logMessage("timeNow:" + timeNow + " documentExpiry: " + documentExpiry + " timeDelta: " + timeDelta);
 
@@ -120,13 +142,14 @@ public class ExpirationTimeAnalyzer {
 					e.printStackTrace();
 					numWithExpiryException++;
 				}	
-			}
+			//}
 				
 		    totalResults++;
 		}
 
 		logMessage("numWithNullDocument:    " + numWithNullDocument);
 		logMessage("numWithExpiryException: " + numWithExpiryException);
+		logMessage("numWithOtherException:  " + numWithOtherException);
 		logMessage("totalResults:           " + totalResults);
 		
 		bucket.close();
@@ -221,7 +244,7 @@ class SimpleHistogram {
 
 		_buckets = new int[_numBuckets];
 		_bucketWidth = _maxValue / _numBuckets;
-		System.out.println("I have " + _numBuckets + " with a width of " + _bucketWidth);
+		System.out.println("SimpleHistogram:  I have " + _numBuckets + " buckets with a bucket width of " + _bucketWidth);
 
 		// initialize, set all counters to zero
 		for (int i = 0; i < _numBuckets; i++) {
@@ -257,7 +280,7 @@ class SimpleHistogram {
 	
 	void processValue(long currVal) {
 		int bucketNum = (int) currVal / _bucketWidth;
-		// System.out.println("Incrementing bucket " + bucketNum);
+		System.out.println("Incrementing bucket " + bucketNum);
 		incrementBucket(bucketNum);
 	}
 
@@ -287,9 +310,9 @@ class SimpleHistogram {
 		int totalItems = 0;
 		
 		// Calculate how many items each screen column should represent
-		float largestVal = _largestItemCount;			
+		float largestVal = _largestItemCount;			// This is the SIZE of the largest bucket
 		float dotsPerVal = spaceToUse / largestVal;
-		System.out.println("largestVal is " + largestVal + " spaceToUse is " + spaceToUse + " dotsPerVal is " + dotsPerVal);
+		System.out.println("terminal columns:" + numColumns + " items in largest bucket: " + largestVal + " spaceToUse is " + spaceToUse + " dotsPerVal is " + dotsPerVal);
 
 		for (int eachRow = 0; eachRow < _numBuckets; eachRow++) {
 			countForBucket = _buckets[eachRow];		
